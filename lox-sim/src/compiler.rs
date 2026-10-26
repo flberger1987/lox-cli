@@ -669,6 +669,12 @@ impl CompiledGraph {
                         state_idx: si,
                     }
                 }
+                // Merker: AQ = Input, Q = Input != 0 (same as a reference)
+                "Memory" => EvalStep::InputRef {
+                    src: resolved_inputs.first().copied().unwrap_or(0),
+                    output_q: outputs.get(1).copied(),
+                    output_aq: outputs.first().copied(),
+                },
                 "AMemory" => {
                     let si = state.len();
                     state.push(BlockState::Latch { value: 0.0 });

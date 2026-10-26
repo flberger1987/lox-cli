@@ -704,6 +704,8 @@ fn block_signature(
         "OnOffDelay" => (&["InputTrigger"], &["Q"], &["TimeOn", "TimeOff"]),
         "OnPulseDelay" => (&["InputTrigger"], &["Q"], &["Delay", "Time"]),
         "Or" => (&["I1", "I2"], &["Q"], &[]),
+        // Merker: AQ carries the value, Q whether it is non-zero
+        "Memory" => (&["Input"], &["AQ", "Q"], &[]),
         "PassThrough" => (&["I1", "Input"], &["Q", "AQ"], &[]),
         "PresenceDetector" => (
             &["InputActivate", "InputExtend", "InputTrigger", "InputReset"],
@@ -2746,4 +2748,27 @@ mod tests {
         assert!((e.get_output("Heating PI.AQ") - 1.0).abs() < 1e-9);
     }
 
+    #[test]
+    fn memory_flag_passes_its_ored_input() {
+        // A Merker written from two places, read through AQ/Q.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<ControlList>
+  <C Type="VirtualIn" U="a" Title="Away button"><Co K="Q" U="a-q"/></C>
+  <C Type="VirtualIn" U="b" Title="Triple click"><Co K="Q" U="b-q"/></C>
+  <C Type="Memory" U="m" Title="Leaving home">
+    <Co K="Input" Nc="2" U="m-in"><In Input="a-q"/><In Input="b-q"/></Co>
+    <Co K="AQ" U="m-aq"/>
+    <Co K="Q" U="m-q"/>
+  </C>
+</ControlList>"#;
+        let graph = parse_bytes(xml.as_bytes()).expect("parse");
+        let mut e = crate::engine::SimEngine::new(graph);
+        e.set_input("Triple click", 1.0);
+        e.tick(0.1);
+        assert_eq!(e.get_output("Leaving home.AQ"), 1.0);
+        assert_eq!(e.get_output("Leaving home.Q"), 1.0);
+        e.set_input("Triple click", 0.0);
+        e.tick(0.1);
+        assert_eq!(e.get_output("Leaving home.Q"), 0.0);
+    }
 }
