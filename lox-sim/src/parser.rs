@@ -553,6 +553,16 @@ fn normalize_connectors(block_type: &str, explicit: Vec<ParsedConnector>) -> Vec
                     default_value: 0.0,
                     explicit_source_uuids: Vec::new(),
                 });
+            } else if let Some(default_value) = positional_param_default(block_type, key) {
+                // These blocks read params by signature position, so a
+                // missing one would shift all that follow it.
+                normalized.push(ParsedConnector {
+                    uuid: format!("__synthetic__{block_type}__{key}"),
+                    key: (*key).to_string(),
+                    dir,
+                    default_value,
+                    explicit_source_uuids: Vec::new(),
+                });
             }
         }
     }
@@ -561,6 +571,25 @@ fn normalize_connectors(block_type: &str, explicit: Vec<ParsedConnector>) -> Vec
     normalized
 }
 
+/// Loxone's defaults for the parameters of blocks that index `params` by
+/// signature position (PI, PID). `None` for every other block or key.
+fn positional_param_default(block_type: &str, key: &str) -> Option<f64> {
+    if !matches!(block_type, "PI" | "PID") {
+        return None;
+    }
+    Some(match key {
+        "Target" => 5.0,
+        "SampleTime" => 1.0,
+        "Trigger" => 1.0,
+        "P" => 2.0,
+        "I" => 1.0,
+        "D" => 0.0,
+        "MV" => 5.0,
+        "Min" => 0.0,
+        "Max" => 10.0,
+        _ => return None,
+    })
+}
 
 fn block_signature(
     block_type: &str,
@@ -2668,6 +2697,53 @@ mod tests {
         let gate = graph.find_block_by_name("Gate").unwrap();
         let i1 = graph.find_connector(gate, "I1").unwrap();
         assert!(graph.input_source_of(i1).is_some());
+    }
+
+    #[test]
+    fn pi_params_keep_their_positions_when_missing_in_xml() {
+        // No Trigger/MV connectors: the remaining params must not shift
+        // into their slots.
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<ControlList>
+  <C Type="VirtualIn" U="t" Title="RoomTemp"><Co K="Q" U="t-q"/></C>
+  <C Type="PI" U="pi" Title="Heating PI">
+    <Co K="Input" U="pi-in"><In Input="t-q"/></Co>
+    <Co K="Target" U="pi-t" Def="22"/>
+    <Co K="P" U="pi-p" Def="0.5"/>
+    <Co K="I" U="pi-i"/>
+    <Co K="SampleTime" U="pi-st" Def="10"/>
+    <Co K="Min" U="pi-min" Def="0"/>
+    <Co K="Max" U="pi-max" Def="100"/>
+    <Co K="AQ" U="pi-aq"/>
+  </C>
+</ControlList>"#;
+        let graph = parse_bytes(xml.as_bytes()).expect("parse");
+        let pi = graph.find_block_by_name("Heating PI").unwrap();
+        let keys: Vec<&str> = graph
+            .block_info(pi)
+            .params
+            .iter()
+            .map(|&cid| graph.connector(cid).key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "Target",
+                "SampleTime",
+                "Trigger",
+                "P",
+                "I",
+                "MV",
+                "Min",
+                "Max"
+            ]
+        );
+
+        let mut e = crate::engine::SimEngine::new(graph);
+        e.set_input("RoomTemp", 20.0);
+        e.tick(0.1);
+        // Kp 0.5 * (22 - 20), Ki 0 (no Def), Trigger default 1 <= |e|
+        assert!((e.get_output("Heating PI.AQ") - 1.0).abs() < 1e-9);
     }
 
 }
