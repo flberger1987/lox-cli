@@ -50,7 +50,10 @@ pub enum SimCmd {
     },
 }
 
+// Unknown keys are rejected: a typo such as `expect` for `expected_outputs`
+// would otherwise drop the checks and the scenario would pass.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SimSpec {
     #[serde(default)]
     name: String,
@@ -83,6 +86,7 @@ struct SimSpec {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SimStep {
     #[serde(default)]
     inputs: HashMap<String, f64>,
@@ -100,6 +104,7 @@ struct SimStep {
 
 /// Simulated wall-clock specification (see [`SimSpec::clock`]).
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClockSpec {
     /// Wall-clock time, `"HH:MM"` or `"HH:MM:SS"`.
     #[serde(default)]
@@ -382,7 +387,8 @@ fn run_one(graph: &SimGraph, spec: &SimSpec) -> ScenarioResult {
         engine.set_time(minutes);
     }
 
-    apply_inputs(&mut engine, &spec.inputs);
+    let unresolved = apply_inputs(&mut engine, &spec.inputs);
+    fail_unresolved_inputs(&unresolved, &mut checks, &mut all_pass);
 
     for _ in 0..spec.ticks {
         engine.tick(spec.dt);
@@ -408,7 +414,8 @@ fn run_one(graph: &SimGraph, spec: &SimSpec) -> ScenarioResult {
         if let Some(minutes) = step.time {
             engine.set_time(minutes);
         }
-        apply_inputs(&mut engine, &step.inputs);
+        let unresolved = apply_inputs(&mut engine, &step.inputs);
+        fail_unresolved_inputs(&unresolved, &mut checks, &mut all_pass);
         let step_dt = if step.dt > 0.0 { step.dt } else { spec.dt };
         for _ in 0..step.ticks {
             engine.tick(step_dt);
@@ -435,7 +442,26 @@ fn run_one(graph: &SimGraph, spec: &SimSpec) -> ScenarioResult {
     }
 }
 
-fn apply_inputs(engine: &mut SimEngine, inputs: &HashMap<String, f64>) {
+/// An input that matches nothing leaves the circuit at its defaults, so the
+/// checks would test something else than intended: fail the scenario.
+fn fail_unresolved_inputs(
+    keys: &[String],
+    checks: &mut Vec<serde_json::Value>,
+    all_pass: &mut bool,
+) {
+    for key in keys {
+        *all_pass = false;
+        checks.push(serde_json::json!({
+            "input": key,
+            "pass": false,
+            "error": "could not set input",
+        }));
+    }
+}
+
+/// Inject `inputs`; returns the keys that matched no connector.
+fn apply_inputs(engine: &mut SimEngine, inputs: &HashMap<String, f64>) -> Vec<String> {
+    let mut unresolved = Vec::new();
     for (key, value) in inputs {
         if engine.set_input(key, *value) {
             continue;
@@ -476,8 +502,10 @@ fn apply_inputs(engine: &mut SimEngine, inputs: &HashMap<String, f64>) {
         }
         if !found {
             eprintln!("warning: could not set input '{key}'");
+            unresolved.push(key.clone());
         }
     }
+    unresolved
 }
 
 fn check_outputs(
@@ -553,9 +581,13 @@ fn cmd_run(file: &str, sim: Option<&str>, sim_file: Option<&str>) -> Result<()> 
     let graph = parse_graph(file)?;
     let sim_json = load_sim_json(sim, sim_file)?;
 
-    let specs: Vec<SimSpec> = match serde_json::from_str::<SimSpec>(&sim_json) {
-        Ok(single) => vec![single],
-        Err(_) => serde_json::from_str(&sim_json).context("invalid sim JSON")?,
+    // Decide object vs. array first, so the error names the actual problem
+    // (e.g. an unknown field) instead of "expected a sequence".
+    let value: serde_json::Value = serde_json::from_str(&sim_json).context("invalid sim JSON")?;
+    let specs: Vec<SimSpec> = if value.is_array() {
+        serde_json::from_value(value).context("invalid sim JSON")?
+    } else {
+        vec![serde_json::from_value(value).context("invalid sim JSON")?]
     };
 
     let mut results = Vec::new();
