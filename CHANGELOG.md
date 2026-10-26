@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `lox sim`: inputs with several `<In>` sources (`Nc="2"`, ...) keep all of them and OR them like the Miniserver; previously only the first source was wired.
+- `lox sim`: PI/PID read their parameters in signature order and follow the Loxone formula (SampleTime, Trigger threshold, Auto/MV, Off) instead of using Trigger/P as output limits, which panicked with "min > max".
+- `lox sim`: `Memory` is modelled as the Loxone memory flag (Input -> AQ, Q) instead of a trigger/reset latch that never passed its input on.
+- `lox sim run`: unknown keys in a spec are rejected, and an input that resolves to nothing fails the scenario instead of only printing a warning.
+
 ## [0.14.2] — 2026-05-08
 
 ### Fixed
